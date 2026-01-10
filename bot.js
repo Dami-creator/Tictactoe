@@ -147,7 +147,6 @@ bot.onText(/\/hangman/, msg=>{
   const state = {word, display:"_".repeat(word.length).split(''), attempts:6, guessed:[]};
   games[chatId] = {type:"hangman", state, players:[msg.from], turnIndex:0, ready:true};
   bot.sendMessage(chatId, `🪄 Hangman started!\n🕹️ ${msg.from.first_name}'s turn.\n${state.display.join(' ')}\n❤️ Attempts left:6`);
-  startTurnTimer(chatId, 30);
 });
 
 // --- Trivia ---
@@ -159,10 +158,9 @@ bot.onText(/\/trivia/, msg=>{
   const question = triviaQs[Math.floor(Math.random()*triviaQs.length)];
   games[chatId]={type:"trivia", state:{question}, players:[msg.from], turnIndex:0, ready:true};
   bot.sendMessage(chatId, `❓ Trivia: ${question.q}\n📝 ${msg.from.first_name}'s turn. Reply with your answer.`);
-  startTurnTimer(chatId, 20);
 });
 
-// --- Word Chain Game (WCG) ---
+// --- WCG ---
 bot.onText(/\/wcg(?:\s+(\w+))?/, msg=>{
   const chatId = msg.chat.id;
   const user = msg.from;
@@ -228,4 +226,47 @@ bot.onText(/\/porn/, msg=>{
 
 ❌ Until then, you cannot use this command.`
   , {parse_mode:'Markdown'});
+});
+
+// --- Handle player input for Hangman & Trivia ---
+bot.on('message', msg => {
+  const chatId = msg.chat.id;
+  const game = games[chatId];
+  if(!game || !game.ready) return;
+
+  // Hangman
+  if(game.type === 'hangman'){
+    const input = msg.text.toLowerCase();
+    if(input.length!==1 || !/[a-z]/.test(input)) return;
+    const state = game.state;
+    if(state.guessed.includes(input)) return bot.sendMessage(chatId, `⚠️ Letter "${input}" already guessed!`);
+    state.guessed.push(input);
+
+    if(state.word.includes(input)){
+      state.word.split('').forEach((l,i)=>{ if(l===input) state.display[i]=l; });
+      bot.sendMessage(chatId, `✅ Good guess! ${state.display.join(' ')}\n❤️ Attempts left: ${state.attempts}`);
+    } else {
+      state.attempts--;
+      bot.sendMessage(chatId, `❌ Wrong guess! ${state.display.join(' ')}\n❤️ Attempts left: ${state.attempts}`);
+    }
+
+    if(!state.display.includes('_')){
+      bot.sendMessage(chatId, `🎉 Congrats ${msg.from.first_name}, you guessed the word "${state.word}"!`);
+      delete games[chatId];
+    } else if(state.attempts<=0){
+      bot.sendMessage(chatId, `💀 Game over! The word was "${state.word}".`);
+      delete games[chatId];
+    }
+  }
+
+  // Trivia
+  else if(game.type === 'trivia'){
+    const input = msg.text.toLowerCase();
+    if(input === game.state.question.a.toLowerCase()){
+      bot.sendMessage(chatId, `🎉 Correct answer, ${msg.from.first_name}!`);
+      delete games[chatId];
+    } else {
+      bot.sendMessage(chatId, `❌ Wrong answer, try again!`);
+    }
+  }
 });
