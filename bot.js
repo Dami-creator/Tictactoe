@@ -6,7 +6,6 @@ const bot = new TelegramBot(token, { polling: true });
 // --- Global State ---
 const games = {};
 const scores = {};
-const activeLeaderboards = {};
 const WIN_COMBOS = [
   [0,1,2],[3,4,5],[6,7,8],
   [0,3,6],[1,4,7],[2,5,8],
@@ -29,16 +28,52 @@ function buildTicTacToeKeyboard(board){
     board.slice(6,9).map((v,i)=>({text:v===' '?"➖":v, callback_data:`ttt_${i+6}`}))
   ]};
 }
-function buildHangmanKeyboard(state){
-  const letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-  const keyboard = letters.map((l,i)=>[{
-    text: state.guessed.includes(l.toLowerCase())?"➖":l,
-    callback_data:`hm_${l.toLowerCase()}`
-  }]);
-  return { inline_keyboard: keyboard };
+function randomMove(board){
+  const empty = board.map((v,i)=>v===' '?i:null).filter(v=>v!==null);
+  return empty[Math.floor(Math.random()*empty.length)];
+}
+function findWinningMove(board, symbol){
+  for(const [a,b,c] of WIN_COMBOS){
+    const values = [board[a], board[b], board[c]];
+    if(values.filter(v=>v===symbol).length===2 && values.includes(' ')){
+      const idx = [a,b,c].find(i=>board[i]===' ');
+      return idx;
+    }
+  }
+  return null;
+}
+function minimax(newBoard, player){
+  const avail = newBoard.map((v,i)=>v===' '?i:null).filter(v=>v!==null);
+  const human = "X", ai = "O";
+  const winner = checkWinner(newBoard);
+  if(winner==='X') return {score:-10};
+  if(winner==='O') return {score:10};
+  if(avail.length===0) return {score:0};
+
+  const moves = [];
+  for(const i of avail){
+    const move = {};
+    move.index = i;
+    newBoard[i] = player;
+    const result = minimax(newBoard, player===ai?human:ai);
+    move.score = result.score;
+    newBoard[i] = ' ';
+    moves.push(move);
+  }
+
+  let bestMove;
+  if(player===ai){
+    let bestScore=-Infinity;
+    for(const m of moves) if(m.score>bestScore){ bestScore=m.score; bestMove=m; }
+    return bestMove;
+  } else {
+    let bestScore=Infinity;
+    for(const m of moves) if(m.score<bestScore){ bestScore=m.score; bestMove=m; }
+    return bestMove;
+  }
 }
 
-// --- Start Command ---
+// --- Startup Menu ---
 bot.onText(/\/start/, msg=>{
   bot.sendMessage(msg.chat.id,
 `🎮 Mini-Game Hub
@@ -51,10 +86,12 @@ bot.onText(/\/start/, msg=>{
 /score - Your score
 /leaderboard - Global leaderboard
 /reset - Reset current game (players only)
-/porn - Premium command (locked)`);
+/porn - Premium command 🔒 (message owner to unlock)
+
+💡 Only the /porn command requires Premium. All other games are free!`);
 });
 
-// --- Reset ---
+// --- Reset Command ---
 bot.onText(/\/reset/, msg=>{
   const chatId=msg.chat.id;
   const game=games[chatId];
@@ -115,69 +152,6 @@ bot.onText(/\/ai(?:\s+(\w+))?/, msg => {
      });
 });
 
-// --- AI Move Functions ---
-function makeAIMove(game) {
-  const board = game.board;
-  const ai = "O", player = "X";
-  let move;
-
-  if(game.aiLevel === "easy") move = randomMove(board);
-  else if(game.aiLevel === "medium") {
-    if(Math.random()<0.5) move = findWinningMove(board, ai) || findWinningMove(board, player) || randomMove(board);
-    else move = randomMove(board);
-  }
-  else if(game.aiLevel === "hard") move = minimax(board, ai).index;
-
-  if(move !== undefined) board[move] = ai;
-}
-
-function randomMove(board){
-  const empty = board.map((v,i)=>v===' '?i:null).filter(v=>v!==null);
-  return empty[Math.floor(Math.random()*empty.length)];
-}
-
-function findWinningMove(board, symbol){
-  for(const [a,b,c] of WIN_COMBOS){
-    const values = [board[a], board[b], board[c]];
-    if(values.filter(v=>v===symbol).length===2 && values.includes(' ')){
-      const idx = [a,b,c].find(i=>board[i]===' ');
-      return idx;
-    }
-  }
-  return null;
-}
-
-function minimax(newBoard, player){
-  const avail = newBoard.map((v,i)=>v===' '?i:null).filter(v=>v!==null);
-  const human = "X", ai = "O";
-  const winner = checkWinner(newBoard);
-  if(winner==='X') return {score:-10};
-  if(winner==='O') return {score:10};
-  if(avail.length===0) return {score:0};
-
-  const moves = [];
-  for(const i of avail){
-    const move = {};
-    move.index = i;
-    newBoard[i] = player;
-    const result = minimax(newBoard, player===ai?human:ai);
-    move.score = result.score;
-    newBoard[i] = ' ';
-    moves.push(move);
-  }
-
-  let bestMove;
-  if(player===ai){
-    let bestScore=-Infinity;
-    for(const m of moves) if(m.score>bestScore){ bestScore=m.score; bestMove=m; }
-    return bestMove;
-  } else {
-    let bestScore=Infinity;
-    for(const m of moves) if(m.score<bestScore){ bestScore=m.score; bestMove=m; }
-    return bestMove;
-  }
-}
-
 // --- Hangman ---
 const words=["javascript","telegram","nodejs","render","bot"];
 bot.onText(/\/hangman/, msg=>{
@@ -223,14 +197,7 @@ bot.onText(/\/wcg(?:\s+(\w+))?/, msg=>{
   startAutoLeaderboard(chatId);
 });
 
-// --- Timers and Auto-Leaderboard ---
-function startTttTimer(chatId){ /* ... same as previous version ... */ }
-function startHangmanTimer(chatId){ /* ... same as previous version ... */ }
-function startTriviaTimer(chatId){ /* ... same as previous version ... */ }
-function startWcgTimer(chatId){ /* ... same as previous version ... */ }
-function startAutoLeaderboard(chatId){ /* ... same as previous version ... */ }
-
-// --- Scores & Manual Leaderboard ---
+// --- Scores & Leaderboard ---
 bot.onText(/\/score/, msg=>{ const sc=scores[msg.from.first_name]||0; bot.sendMessage(msg.chat.id,`🏆 ${msg.from.first_name}, your score: ${sc}`); });
 bot.onText(/\/leaderboard/, msg=>{
   if(Object.keys(scores).length===0) return bot.sendMessage(msg.chat.id,"📉 No games played yet.");
@@ -240,15 +207,36 @@ bot.onText(/\/leaderboard/, msg=>{
   bot.sendMessage(msg.chat.id,text);
 });
 
-// --- Premium Command ---
+// --- Premium /porn Command ---
 bot.onText(/\/porn/, msg=>{
+  const chatId = msg.chat.id;
   const ownerUsername = "@YourTelegramUsername"; // <-- replace with your Telegram username
-  bot.sendMessage(msg.chat.id,
+
+  if (games[chatId] && games[chatId].state?.timeout) {
+    return bot.sendMessage(chatId, "⏳ A game is currently ongoing. Wait for it to finish or /reset.");
+  }
+
+  bot.sendMessage(chatId,
 `🚫 Access Denied!
 ⚠️ This command is ONLY available to Premium users.
 
 💰 To unlock this command, message ${ownerUsername} on Telegram to buy Premium access.
 
 ❌ Until then, you cannot use this command.`
-  );
+  ).then(sentMsg => {
+    const timeout = setTimeout(() => {
+      bot.deleteMessage(chatId, sentMsg.message_id).catch(()=>{});
+    }, 10000); // 10s timer
+
+    if(!games[chatId]) games[chatId]={state:{}};
+    games[chatId].state.pornTimeout = timeout;
+  });
 });
+
+// --- Placeholder Timer Functions ---
+function startTttTimer(chatId){}
+function startHangmanTimer(chatId){}
+function startTriviaTimer(chatId){}
+function startWcgTimer(chatId){}
+function startAutoLeaderboard(chatId){}
+function buildHangmanKeyboard(state){ return {inline_keyboard:[]}; } // to implement full keyboard
