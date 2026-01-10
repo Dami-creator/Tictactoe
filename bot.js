@@ -109,6 +109,7 @@ bot.onText(/\/join/, msg=>{
   const game = games[chatId];
   if(!game) return;
   if(game.players.find(p=>p.id===user.id)) return bot.sendMessage(chatId,"⚠️ You already joined this game.");
+
   game.players.push(user);
   bot.sendMessage(chatId, `✅ ${user.first_name} joined! (${game.players.length} players)`);
 });
@@ -179,13 +180,16 @@ bot.onText(/\/wcg(?:\s+(\w+))?/, msg=>{
     ready:false
   };
 
-  bot.sendMessage(chatId, `🔗 Word Chain Game created! Difficulty: ${level.toUpperCase()}\n✋ Players type /join to participate. Waiting 30s for more players...`);
+  bot.sendMessage(chatId, `🔗 Word Chain Game created by ${user.first_name}!
+✋ Waiting for more players to type /join...
+⏱️ 30s to join before game auto-cancels.`);
 
   games[chatId].state.joinTimer = setTimeout(()=>{
     const game = games[chatId];
     if(game.players.length >= 2){
       game.ready = true;
-      bot.sendMessage(chatId, `🎮 WCG starting now with ${game.players.length} players!\n🕹️ ${game.players[game.turnIndex].first_name}'s turn. Send your word in 15 seconds ⏱️.`);
+      bot.sendMessage(chatId, `🎮 WCG starting now with ${game.players.length} players!
+🕹️ ${game.players[game.turnIndex].first_name}'s turn. Send your word in 15 seconds ⏱️.`);
       startTurnTimer(chatId, 15);
     } else {
       delete games[chatId];
