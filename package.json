@@ -1,18 +1,13 @@
 {
-  "name": "telegram-mini-games-bot",
+  "name": "telegram-bot",
   "version": "1.0.0",
-  "description": "Mini-games Telegram bot with Tic-Tac-Toe, Hangman, Trivia, WCG and premium command",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.63.0",
-    "dotenv": "^16.3.1"
-  },
-  "engines": {
-    "node": "18.x"
-  },
-  "author": "YourName",
-  "license": "MIT"
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2",
+    "node-telegram-bot-api": "^0.61.0"
+  }
 }
