@@ -1,292 +1,307 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const token = process.env.TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-// --- Global State ---
-const games = {};
-const scores = {};
-const WIN_COMBOS = [
-  [0,1,2],[3,4,5],[6,7,8],
-  [0,3,6],[1,4,7],[2,5,8],
-  [0,4,8],[2,4,6]
-];
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// --- Helper Functions ---
-function buildBoardMessage(board){ 
-  return board.map((v,i)=>v===' '?"➖":v).reduce((str,v,i)=>str+v+((i+1)%3===0?'\n':' '),''); 
+/* =========================
+   AUTO DICTIONARY
+========================= */
+let dictionary = new Set();
+async function loadDictionary() {
+  try {
+    const res = await fetch('https://raw.githubusercontent.com/dwyl/english-words/master/words.txt');
+    const text = await res.text();
+    dictionary = new Set(text.split('\n').map(w => w.trim().toLowerCase()).filter(Boolean));
+    console.log(`📚 Dictionary loaded: ${dictionary.size} words`);
+  } catch (err) {
+    console.error('❌ Failed to load dictionary:', err);
+  }
 }
-function nextPlayer(game){ 
-  game.turnIndex=(game.turnIndex+1)%game.players.length; 
-  return game.players[game.turnIndex]; 
+loadDictionary();
+
+function isValidWord(word) { return dictionary.has(word.toLowerCase()); }
+function uname(user) { return user.username ? `@${user.username}` : user.first_name; }
+
+/* =========================
+   GLOBAL STORAGE
+========================= */
+const games = {}; // chatId → current game
+const wcgLeaderboard = {};
+const premiumUsers = new Set([]); // Add premium Telegram IDs if needed
+
+/* =========================
+   HELPERS
+========================= */
+function randomLetter() { return String.fromCharCode(65 + Math.floor(Math.random() * 26)); }
+function getSettings(difficulty) {
+  if (difficulty === 'easy') return { startLen: 3, inc: 1, time: 30000 };
+  if (difficulty === 'hard') return { startLen: 5, inc: 2, time: 10000 };
+  return { startLen: 4, inc: 1, time: 20000 }; // medium
 }
-function startTurnTimer(chatId, seconds=15){
-  const game = games[chatId];
-  if(!game || !game.ready) return;
-  if(game.state.timer) clearTimeout(game.state.timer);
 
-  game.state.timer = setTimeout(()=>{
-    if(!games[chatId]) return;
-
-    const player = game.players[game.turnIndex];
-    bot.sendMessage(chatId, `⏳ Time's up for ${player.first_name}! Passing turn ➡️`);
-    game.turnIndex = (game.turnIndex + 1) % game.players.length;
-    startTurnTimer(chatId, seconds);
-  }, seconds*1000);
-}
-
-// --- Reset Command ---
-bot.onText(/\/reset/, msg=>{
+/* =========================
+   STARTUP MENU
+========================= */
+bot.onText(/\/start/, msg => {
   const chatId = msg.chat.id;
-  const game = games[chatId];
-  if(!game) return bot.sendMessage(chatId,"ℹ️ No game to reset.");
-  if(!game.players.some(p => p.id === msg.from.id)) return bot.sendMessage(chatId,"⚠️ Only current players can reset this game.");
+  const menu = `👋 Hello ${uname(msg.from)}!\n\n` +
+               `🎮 *Available Games & Commands:*\n\n` +
+               `🟢 /wcg — Word Challenge Game\n` +
+               `🟢 /hangman — Hangman Game\n` +
+               `🟢 /trivia — Trivia Game\n` +
+               `🟢 join — Join a game lobby\n` +
+               `🔄 /reset — Reset current game (players only)\n` +
+               `🏆 /wcgleaderboard — Show WCG leaderboard\n` +
+               `🔞 /porn — Premium only content\n\n` +
+               `💡 Tip: Only current players can reset a game.\n` +
+               `💬 Premium content unlock: message [TyburnUK](https://t.me/TyburnUK)`;
 
-  if(game.state.timer) clearTimeout(game.state.timer);
-  if(game.state.joinTimer) clearTimeout(game.state.joinTimer);
-  
-  delete games[chatId];
-  bot.sendMessage(chatId,"✅ Game has been reset. All timers stopped!");
+  bot.sendMessage(chatId, menu, { parse_mode: 'Markdown' });
 });
 
-// --- Startup Menu ---
-bot.onText(/\/start/, msg=>{
-  bot.sendMessage(msg.chat.id,
-`🎮 *Mini-Game Hub* 🕹️
+/* =========================
+   MESSAGE HANDLER
+========================= */
+bot.on('message', async msg => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const text = msg.text?.trim();
+  if (!text) return;
 
-🤝 /play - Tic-Tac-Toe vs friend
-🤖 /ai [easy|medium|hard] - Tic-Tac-Toe vs AI
-✋ /join - Join current game
-🪄 /hangman - Hangman
-❓ /trivia - Trivia
-🔗 /wcg [easy|medium|hard] - Word Chain Game
-🏆 /score - Your score
-🌐 /leaderboard - Global leaderboard
-🔄 /reset - Reset current game (players only)
-🔞 /porn - Premium command 🔒 (message owner to unlock)
-
-💡 Only the /porn command requires Premium. All other games are free!`);
-});
-
-// --- Tic-Tac-Toe ---
-bot.onText(/\/play/, msg=>{
-  const chatId = msg.chat.id, user = msg.from;
-  if(games[chatId]) return bot.sendMessage(chatId,"⚠️ Finish current game or /reset.");
-
-  games[chatId] = {
-    type:"tictactoe",
-    board:Array(9).fill(' '),
-    players:[user],
-    turnIndex:0,
-    ai:false,
-    state:{timer:null, joinTimer:null},
-    ready:false
-  };
-
-  bot.sendMessage(chatId, `${user.first_name} started Tic-Tac-Toe! Waiting for another player to /join. Game will start in 30s.`);
-
-  games[chatId].state.joinTimer = setTimeout(()=>{
-    const game = games[chatId];
-    if(game.players.length >= 2){
-      game.ready = true;
-      bot.sendMessage(chatId, `🎲 Game started with 2 players!\n🕹️ ${game.players[game.turnIndex].first_name}'s turn.\n${buildBoardMessage(game.board)}`);
-      startTurnTimer(chatId, 30);
-    } else {
-      delete games[chatId];
-      bot.sendMessage(chatId, "❌ Not enough players joined. Game canceled.");
+  /* ===== PREMIUM COMMAND ===== */
+  if (text === '/porn') {
+    if (!premiumUsers.has(userId)) {
+      return bot.sendMessage(chatId,
+        `🚫 Access Denied! ⚠️\n` +
+        `This command is ONLY available to Premium users. 💰\n` +
+        `To unlock, message [TyburnUK](https://t.me/TyburnUK) on Telegram.\n` +
+        `❌ Until then, you cannot use this command.`,
+        { parse_mode: 'Markdown' }
+      );
     }
-  }, 30000);
-});
+    return bot.sendMessage(chatId, '✅ Welcome, Premium user! Here is your content.');
+  }
 
-bot.onText(/\/join/, msg=>{
-  const chatId = msg.chat.id, user = msg.from;
-  const game = games[chatId];
-  if(!game) return;
-  if(game.players.find(p=>p.id===user.id)) return bot.sendMessage(chatId,"⚠️ You already joined this game.");
-
-  game.players.push(user);
-  bot.sendMessage(chatId, `✅ ${user.first_name} joined! (${game.players.length} players)`);
-});
-
-// --- Tic-Tac-Toe vs AI ---
-bot.onText(/\/ai(?:\s+(\w+))?/, msg=>{
-  const chatId = msg.chat.id;
-  if(games[chatId]) return bot.sendMessage(chatId, "⚠️ Finish current game or /reset.");
-
-  const level = (msg.text.split(" ")[1] || "medium").toLowerCase();
-  if(!["easy","medium","hard"].includes(level)) return bot.sendMessage(chatId,"⚠️ Difficulty must be easy, medium, or hard.");
-
-  games[chatId] = {
-    type:"tictactoe",
-    board:Array(9).fill(' '),
-    players:[msg.from],
-    turnIndex:0,
-    ai:true,
-    aiLevel:level,
-    state:{timer:null},
-    ready:true
-  };
-
-  bot.sendMessage(chatId, `🤖 Tic-Tac-Toe vs AI started! Difficulty: ${level.toUpperCase()}\n🕹️ ${msg.from.first_name}'s turn.\n${buildBoardMessage(games[chatId].board)}`);
-  startTurnTimer(chatId, 30);
-});
-
-// --- Hangman ---
-const words=["javascript","telegram","nodejs","render","bot"];
-bot.onText(/\/hangman/, msg=>{
-  const chatId=msg.chat.id;
-  if(games[chatId]) return bot.sendMessage(chatId,"⚠️ Finish current game or /reset.");
-
-  const word = words[Math.floor(Math.random()*words.length)];
-  const state = {word, display:"_".repeat(word.length).split(''), attempts:6, guessed:[]};
-  games[chatId] = {type:"hangman", state, players:[msg.from], turnIndex:0, ready:true};
-  bot.sendMessage(chatId, `🪄 Hangman started!\n🕹️ ${msg.from.first_name}'s turn.\n${state.display.join(' ')}\n❤️ Attempts left:6`);
-});
-
-// --- Trivia ---
-const triviaQs=[{q:"Capital of France?",a:"paris"},{q:"2+2*2=?",a:"6"},{q:"Largest planet?",a:"jupiter"}];
-bot.onText(/\/trivia/, msg=>{
-  const chatId = msg.chat.id;
-  if(games[chatId]) return bot.sendMessage(chatId,"⚠️ Finish current game or /reset.");
-
-  const question = triviaQs[Math.floor(Math.random()*triviaQs.length)];
-  games[chatId]={type:"trivia", state:{question}, players:[msg.from], turnIndex:0, ready:true};
-  bot.sendMessage(chatId, `❓ Trivia: ${question.q}\n📝 ${msg.from.first_name}'s turn. Reply with your answer.`);
-});
-
-// --- WCG ---
-bot.onText(/\/wcg(?:\s+(\w+))?/, msg=>{
-  const chatId = msg.chat.id;
-  const user = msg.from;
-  if(games[chatId]) return bot.sendMessage(chatId,"⚠️ Finish current game or /reset.");
-
-  const level = (msg.text.split(" ")[1] || "easy").toLowerCase();
-  const minLen = {easy:3, medium:4, hard:6}[level];
-  if(!minLen) return bot.sendMessage(chatId,"⚠️ Difficulty must be easy, medium, or hard.");
-
-  games[chatId] = {
-    type:"wcg",
-    state:{lastWord:"", used:[], difficulty:level, timer:null, joinTimer:null},
-    players:[user],
-    turnIndex:0,
-    ready:false
-  };
-
-  bot.sendMessage(chatId, `🔗 Word Chain Game created by ${user.first_name}!
-✋ Waiting for more players to type /join...
-⏱️ 30s to join before game auto-cancels.`);
-
-  games[chatId].state.joinTimer = setTimeout(()=>{
+  /* ===== RESET COMMAND ===== */
+  if (text === '/reset' && games[chatId]) {
     const game = games[chatId];
-    if(game.players.length >= 2){
-      game.ready = true;
-      bot.sendMessage(chatId, `🎮 WCG starting now with ${game.players.length} players!
-🕹️ ${game.players[game.turnIndex].first_name}'s turn. Send your word in 15 seconds ⏱️.`);
-      startTurnTimer(chatId, 15);
-    } else {
-      delete games[chatId];
-      bot.sendMessage(chatId, "❌ Not enough players joined. Game canceled.");
+    if (!game.players.includes(userId)) return;
+    clearTimeout(game.timer);
+    clearTimeout(game.lobbyTimer);
+    delete games[chatId];
+    return bot.sendMessage(chatId, '🔄 Game reset.');
+  }
+
+  /* ===== JOIN ===== */
+  if (text.toLowerCase() === 'join' && games[chatId] && !games[chatId].started) {
+    const game = games[chatId];
+    if (!game.players.includes(userId)) {
+      game.players.push(userId);
+      return bot.sendMessage(chatId, `✅ ${uname(msg.from)} joined`);
     }
-  }, 30000);
+    return;
+  }
+
+  /* ===== WCG START ===== */
+  if (text === '/wcg') {
+    if (games[chatId]) return bot.sendMessage(chatId, '⚠️ A game is already running.');
+
+    const difficulty = 'medium';
+    const settings = getSettings(difficulty);
+
+    games[chatId] = {
+      type: 'wcg',
+      players: [],
+      started: false,
+      currentTurn: 0,
+      usedWords: [],
+      letter: '',
+      minLength: settings.startLen,
+      difficulty,
+      timer: null,
+      lobbyTimer: null
+    };
+
+    bot.sendMessage(chatId,
+      `🧩 *Word Challenge Game*\n\n` +
+      `👥 Type *join* to play\n` +
+      `🎚 Difficulty: *${difficulty}*\n` +
+      `⏳ Game starts in 30 seconds`,
+      { parse_mode: 'Markdown' }
+    );
+
+    games[chatId].lobbyTimer = setTimeout(() => {
+      const game = games[chatId];
+      if (!game || game.players.length < 2) {
+        delete games[chatId];
+        return bot.sendMessage(chatId, '❌ Not enough players. Game cancelled.');
+      }
+      startWCG(chatId);
+    }, 30000);
+
+    return;
+  }
+
+  /* ===== HANGMAN START ===== */
+  if (text === '/hangman') {
+    if (games[chatId]) return bot.sendMessage(chatId, '⚠️ A game is already running.');
+
+    const wordArr = Array.from(dictionary);
+    const word = wordArr[Math.floor(Math.random() * wordArr.length)];
+
+    games[chatId] = {
+      type: 'hangman',
+      word,
+      guessed: [],
+      tries: 6,
+      players: [userId],
+      started: true,
+      timer: null
+    };
+
+    return bot.sendMessage(chatId,
+      `🎯 *Hangman Game*\nWord: ${'_ '.repeat(word.length)}\nGuess letters!`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  /* ===== TRIVIA START ===== */
+  if (text === '/trivia') {
+    if (games[chatId]) return bot.sendMessage(chatId, '⚠️ A game is already running.');
+
+    const wordArr = Array.from(dictionary);
+    const answer = wordArr[Math.floor(Math.random() * wordArr.length)];
+
+    games[chatId] = {
+      type: 'trivia',
+      answer,
+      started: true,
+      players: [userId],
+      timer: null
+    };
+
+    return bot.sendMessage(chatId,
+      `❓ *Trivia Game*\nGuess the word!`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  /* ===== LEADERBOARD ===== */
+  if (text === '/wcgleaderboard') {
+    if (!Object.keys(wcgLeaderboard).length) return bot.sendMessage(chatId, '📭 No games yet.');
+    let msg = '🏆 *Global WCG Leaderboard*\n\n';
+    Object.entries(wcgLeaderboard)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([id, wins], i) => msg += `${i + 1}. <@${id}> — ${wins} wins\n`);
+    return bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+  }
+
+  /* ===== GAMEPLAY ===== */
+  if (games[chatId]?.started) {
+    const game = games[chatId];
+
+    /* ------ WCG ------ */
+    if (game.type === 'wcg') {
+      const currentPlayer = game.players[game.currentTurn];
+      if (userId !== currentPlayer) return;
+
+      const word = text.toLowerCase();
+      if (!word.startsWith(game.letter.toLowerCase()))
+        return bot.sendMessage(chatId, '❌ Wrong starting letter');
+      if (word.length !== game.minLength)
+        return bot.sendMessage(chatId, `❌ Word must be *${game.minLength} letters*`, { parse_mode: 'Markdown' });
+      if (game.usedWords.includes(word))
+        return bot.sendMessage(chatId, '❌ Word already used');
+      if (!isValidWord(word))
+        return bot.sendMessage(chatId, '📚 Invalid English word ❌');
+
+      game.usedWords.push(word);
+      clearTimeout(game.timer);
+      game.minLength += getSettings(game.difficulty).inc;
+      game.currentTurn = (game.currentTurn + 1) % game.players.length;
+      nextRound(chatId);
+    }
+
+    /* ------ Hangman ------ */
+    if (game.type === 'hangman') {
+      const letter = text.toLowerCase();
+      if (letter.length !== 1) return;
+      if (game.guessed.includes(letter)) return;
+      game.guessed.push(letter);
+
+      if (!game.word.includes(letter)) game.tries--;
+
+      let display = '';
+      for (const l of game.word) display += game.guessed.includes(l) ? l : '_';
+      bot.sendMessage(chatId, `🎯 ${display}\nTries left: ${game.tries}`);
+
+      if (!display.includes('_')) {
+        delete games[chatId];
+        bot.sendMessage(chatId, `🏆 *You guessed it!* The word was: ${game.word}`, { parse_mode: 'Markdown' });
+      } else if (game.tries <= 0) {
+        delete games[chatId];
+        bot.sendMessage(chatId, `💀 *Game Over!* The word was: ${game.word}`, { parse_mode: 'Markdown' });
+      }
+    }
+
+    /* ------ Trivia ------ */
+    if (game.type === 'trivia') {
+      const word = text.toLowerCase();
+      if (word === game.answer) {
+        delete games[chatId];
+        bot.sendMessage(chatId, `🏆 Correct! The answer was: *${game.answer}*`, { parse_mode: 'Markdown' });
+      }
+    }
+  }
 });
 
-// --- Scores & Leaderboard ---
-bot.onText(/\/score/, msg=>{ 
-  const sc=scores[msg.from.first_name]||0; 
-  bot.sendMessage(msg.chat.id,`🏆 ${msg.from.first_name}, your score: ${sc}`); 
-});
-bot.onText(/\/leaderboard/, msg=>{
-  if(Object.keys(scores).length===0) return bot.sendMessage(msg.chat.id,"📉 No games played yet.");
-  const sorted = Object.entries(scores).sort((a,b)=>b[1]-a[1]);
-  let text="🏆 Global Leaderboard\n\n";
-  sorted.slice(0,10).forEach(([name,sc],i)=>{ 
-    const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':'🔹'; 
-    text+=`${medal} ${i+1}. ${name} — ${sc} wins\n`; 
-  });
-  bot.sendMessage(msg.chat.id,text);
-});
+/* =========================
+   WCG GAME FLOW
+========================= */
+function startWCG(chatId) {
+  const game = games[chatId];
+  game.started = true;
+  game.currentTurn = 0;
+  game.usedWords = [];
+  nextRound(chatId);
+}
 
-// --- Premium /porn Command ---
-bot.onText(/\/porn/, msg=>{
-  const chatId = msg.chat.id;
+function nextRound(chatId) {
+  const game = games[chatId];
+  clearTimeout(game.timer);
+
+  game.letter = randomLetter();
+  const playerId = game.players[game.currentTurn];
+  const settings = getSettings(game.difficulty);
+
   bot.sendMessage(chatId,
-`🚫 Access Denied!
-🔒 This command is ONLY available to Premium users.
+    `🔤 *New Round*\n\n` +
+    `👤 Player: <@${playerId}>\n` +
+    `🅰️ Letter: *${game.letter}*\n` +
+    `📏 Length: *${game.minLength} letters*\n` +
+    `⏰ Time: ${settings.time / 1000}s`,
+    { parse_mode: 'Markdown' }
+  );
 
-💰 To unlock, message [Owner](https://t.me/TyburnUK) on Telegram.
+  game.timer = setTimeout(() => {
+    const loser = game.players[game.currentTurn];
+    game.players.splice(game.currentTurn, 1);
 
-❌ Until then, you cannot use this command.`
-  , {parse_mode:'Markdown'});
-});
+    bot.sendMessage(chatId, `⏰ <@${loser}> eliminated ❌`, { parse_mode: 'Markdown' });
 
-// --- Handle player input for Hangman, Trivia, WCG ---
-bot.on('message', msg => {
-  const chatId = msg.chat.id;
-  const game = games[chatId];
-  if(!game) return;
-
-  // Ignore commands
-  if(msg.text.startsWith('/')) return;
-
-  // --- Hangman ---
-  if(game.type === 'hangman'){
-    const input = msg.text.toLowerCase();
-    if(input.length!==1 || !/[a-z]/.test(input)) return;
-    const state = game.state;
-    if(state.guessed.includes(input)) return bot.sendMessage(chatId, `⚠️ Letter "${input}" already guessed!`);
-    state.guessed.push(input);
-
-    if(state.word.includes(input)){
-      state.word.split('').forEach((l,i)=>{ if(l===input) state.display[i]=l; });
-      bot.sendMessage(chatId, `✅ Good guess! ${state.display.join(' ')}\n❤️ Attempts left: ${state.attempts}`);
-    } else {
-      state.attempts--;
-      bot.sendMessage(chatId, `❌ Wrong guess! ${state.display.join(' ')}\n❤️ Attempts left: ${state.attempts}`);
-    }
-
-    if(!state.display.includes('_')){
-      bot.sendMessage(chatId, `🎉 Congrats ${msg.from.first_name}, you guessed the word "${state.word}"!`);
+    if (game.players.length === 1) {
+      const winner = game.players[0];
+      wcgLeaderboard[winner] = (wcgLeaderboard[winner] || 0) + 1;
+      bot.sendMessage(chatId,
+        `🏆 *Winner!*\n🎉 <@${winner}> wins!\n🔥 Wins: ${wcgLeaderboard[winner]}`,
+        { parse_mode: 'Markdown' }
+      );
       delete games[chatId];
-    } else if(state.attempts<=0){
-      bot.sendMessage(chatId, `💀 Game over! The word was "${state.word}".`);
-      delete games[chatId];
-    }
-  }
-
-  // --- Trivia ---
-  else if(game.type === 'trivia'){
-    const answer = game.state.question.a.toLowerCase();
-    if(msg.text.toLowerCase() === answer){
-      bot.sendMessage(chatId, `🎉 Correct answer, ${msg.from.first_name}!`);
-      delete games[chatId];
-    } else {
-      bot.sendMessage(chatId, `❌ Wrong answer, try again!`);
-    }
-  }
-
-  // --- WCG ---
-  else if(game.type === 'wcg' && game.ready){
-    const player = game.players[game.turnIndex];
-    if(msg.from.id !== player.id) return; // only current player input
-
-    const word = msg.text.toLowerCase();
-    if(word.length < {easy:3, medium:4, hard:6}[game.state.difficulty]){
-      return bot.sendMessage(chatId, `⚠️ Word too short for ${game.state.difficulty} level.`);
-    }
-    if(game.state.used.includes(word)){
-      return bot.sendMessage(chatId, `⚠️ Word already used!`);
-    }
-    if(game.state.lastWord && word[0] !== game.state.lastWord.slice(-1)){
-      return bot.sendMessage(chatId, `⚠️ Word must start with "${game.state.lastWord.slice(-1)}"`);
+      return;
     }
 
-    game.state.used.push(word);
-    game.state.lastWord = word;
-    bot.sendMessage(chatId, `✅ Accepted: ${word}`);
-
-    // Next turn
-    nextPlayer(game);
-    bot.sendMessage(chatId, `🕹️ Next: ${game.players[game.turnIndex].first_name}'s turn!`);
-    startTurnTimer(chatId,15);
-  }
-});
+    if (game.currentTurn >= game.players.length) game.currentTurn = 0;
+    nextRound(chatId);
+  }, settings.time);
+}
