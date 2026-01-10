@@ -162,7 +162,9 @@ bot.onText(/\/leaderboard/, msg=>{
 // --- Premium /porn Command ---
 bot.onText(/\/porn/, msg=>{
   const chatId = msg.chat.id;
-  if (games[chatId] && games[chatId].state?.timer) return bot.sendMessage(chatId,"⏳ A game is currently ongoing. Wait or /reset.");
+  if (games[chatId] && games[chatId].state?.timer) 
+      return bot.sendMessage(chatId,"⏳ A game is currently ongoing. Wait or /reset.");
+  
   bot.sendMessage(chatId,
 `🚫 Access Denied!
 🔒 This command is ONLY available to Premium users.
@@ -171,6 +173,8 @@ bot.onText(/\/porn/, msg=>{
 
 ❌ Until then, you cannot use this command.`
   , {parse_mode:'Markdown'}).then(sentMsg=>{
-    setTimeout(()=>{ bot.deleteMessage(chatId,sentMsg.message_id).catch(()=>{}); },10000);
+    setTimeout(()=>{ 
+      bot.deleteMessage(chatId,sentMsg.message_id).catch(()=>{}); 
+    },10000);
   });
 });
