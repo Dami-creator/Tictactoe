@@ -13,12 +13,6 @@ const WIN_COMBOS = [
 ];
 
 // --- Helper Functions ---
-function checkWinner(board){
-  for(const [a,b,c] of WIN_COMBOS)
-    if(board[a]===board[b] && board[b]===board[c] && board[a]!==' ') return board[a];
-  if(!board.includes(' ')) return 'Draw';
-  return null;
-}
 function buildBoardMessage(board){ 
   return board.map((v,i)=>v===' '?"➖":v).reduce((str,v,i)=>str+v+((i+1)%3===0?'\n':' '),''); 
 }
@@ -215,9 +209,6 @@ bot.onText(/\/leaderboard/, msg=>{
 // --- Premium /porn Command ---
 bot.onText(/\/porn/, msg=>{
   const chatId = msg.chat.id;
-  if (games[chatId] && games[chatId].state?.timer) 
-      return bot.sendMessage(chatId,"⏳ A game is currently ongoing. Wait or /reset.");
-  
   bot.sendMessage(chatId,
 `🚫 Access Denied!
 🔒 This command is ONLY available to Premium users.
@@ -228,13 +219,16 @@ bot.onText(/\/porn/, msg=>{
   , {parse_mode:'Markdown'});
 });
 
-// --- Handle player input for Hangman & Trivia ---
+// --- Handle player input for Hangman, Trivia, WCG ---
 bot.on('message', msg => {
   const chatId = msg.chat.id;
   const game = games[chatId];
-  if(!game || !game.ready) return;
+  if(!game) return;
 
-  // Hangman
+  // Ignore commands
+  if(msg.text.startsWith('/')) return;
+
+  // --- Hangman ---
   if(game.type === 'hangman'){
     const input = msg.text.toLowerCase();
     if(input.length!==1 || !/[a-z]/.test(input)) return;
@@ -259,14 +253,40 @@ bot.on('message', msg => {
     }
   }
 
-  // Trivia
+  // --- Trivia ---
   else if(game.type === 'trivia'){
-    const input = msg.text.toLowerCase();
-    if(input === game.state.question.a.toLowerCase()){
+    const answer = game.state.question.a.toLowerCase();
+    if(msg.text.toLowerCase() === answer){
       bot.sendMessage(chatId, `🎉 Correct answer, ${msg.from.first_name}!`);
       delete games[chatId];
     } else {
       bot.sendMessage(chatId, `❌ Wrong answer, try again!`);
     }
+  }
+
+  // --- WCG ---
+  else if(game.type === 'wcg' && game.ready){
+    const player = game.players[game.turnIndex];
+    if(msg.from.id !== player.id) return; // only current player input
+
+    const word = msg.text.toLowerCase();
+    if(word.length < {easy:3, medium:4, hard:6}[game.state.difficulty]){
+      return bot.sendMessage(chatId, `⚠️ Word too short for ${game.state.difficulty} level.`);
+    }
+    if(game.state.used.includes(word)){
+      return bot.sendMessage(chatId, `⚠️ Word already used!`);
+    }
+    if(game.state.lastWord && word[0] !== game.state.lastWord.slice(-1)){
+      return bot.sendMessage(chatId, `⚠️ Word must start with "${game.state.lastWord.slice(-1)}"`);
+    }
+
+    game.state.used.push(word);
+    game.state.lastWord = word;
+    bot.sendMessage(chatId, `✅ Accepted: ${word}`);
+
+    // Next turn
+    nextPlayer(game);
+    bot.sendMessage(chatId, `🕹️ Next: ${game.players[game.turnIndex].first_name}'s turn!`);
+    startTurnTimer(chatId,15);
   }
 });
