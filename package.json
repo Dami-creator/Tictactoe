@@ -1,17 +1,17 @@
 {
   "name": "telegram-bot",
   "version": "1.0.0",
-  "description": "Telegram Bot with WCG, Hangman, Trivia",
+  "description": "Word Challenge Game and XO Telegram bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.61.0",
-    "node-fetch": "^3.3.2",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.1",
+    "node-telegram-bot-api": "^0.61.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": "22.x"
   }
 }
