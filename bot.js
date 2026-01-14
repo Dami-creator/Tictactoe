@@ -47,9 +47,9 @@ bot.onText(/\/start/, msg => {
   const menu = `👋 Hello ${uname(msg.from)}!\n\n` +
                `🎮 *Available Games & Commands:*\n\n` +
                `🟢 /wcg — Word Challenge Game\n` +
-               `🟢 /xo — Tic-Tac-Toe Game\n` +
+               `🟢 /xo — Tic-Tac-Toe (X & O)\n` +
                `🟢 join — Join a game lobby\n` +
-               `🔄 /reset — Reset current game (players only)\n` +
+               `🔄 /reset — Reset current game\n` +
                `🏆 /wcgleaderboard — Show WCG leaderboard`;
 
   bot.sendMessage(chatId, menu, { parse_mode: 'Markdown' });
@@ -75,8 +75,8 @@ bot.on('message', async msg => {
   /* ===== JOIN ===== */
   if (text.toLowerCase() === 'join' && games[chatId] && !games[chatId].started) {
     const game = games[chatId];
-    if (!game.players.find(p => p.id === userId)) {
-      game.players.push({ id: userId, name: uname(msg.from) });
+    if (!game.players.includes(userId)) {
+      game.players.push(userId);
       return bot.sendMessage(chatId, `✅ ${uname(msg.from)} joined`);
     }
     return;
@@ -85,7 +85,6 @@ bot.on('message', async msg => {
   /* ===== WCG START ===== */
   if (text === '/wcg') {
     if (games[chatId]) return bot.sendMessage(chatId, '⚠️ A game is already running.');
-
     const difficulty = 'medium';
     const settings = getSettings(difficulty);
 
@@ -94,7 +93,7 @@ bot.on('message', async msg => {
       players: [],
       started: false,
       currentTurn: 0,
-      usedWords: new Set(),
+      usedWords: [],
       letter: '',
       minLength: settings.startLen,
       difficulty,
@@ -103,10 +102,7 @@ bot.on('message', async msg => {
     };
 
     bot.sendMessage(chatId,
-      `🧩 *Word Challenge Game*\n\n` +
-      `👥 Type *join* to play\n` +
-      `🎚 Difficulty: *${difficulty}*\n` +
-      `⏳ Game starts in 30 seconds`,
+      `🧩 *Word Challenge Game*\n👥 Type *join* to play\n🎚 Difficulty: *${difficulty}*\n⏳ Game starts in 20 seconds`,
       { parse_mode: 'Markdown' }
     );
 
@@ -117,96 +113,145 @@ bot.on('message', async msg => {
         return bot.sendMessage(chatId, '❌ Not enough players. Game cancelled.');
       }
       startWCG(chatId);
-    }, 30000);
+    }, 20000);
 
+    return;
+  }
+
+  /* ===== XO START ===== */
+  if (text === '/xo') {
+    if (games[chatId]) return bot.sendMessage(chatId, '⚠️ A game is already running.');
+    games[chatId] = {
+      type: 'xo',
+      players: [],
+      board: Array(9).fill('⬜'),
+      currentTurn: 0,
+      started: false,
+      timer: null,
+      lobbyTimer: null
+    };
+    bot.sendMessage(chatId, `❎⭕ Tic-Tac-Toe\n👥 Type *join* to play\n⏳ Game starts in 20 seconds`, { parse_mode: 'Markdown' });
+    games[chatId].lobbyTimer = setTimeout(() => {
+      const game = games[chatId];
+      if (!game || game.players.length < 2) {
+        delete games[chatId];
+        return bot.sendMessage(chatId, '❌ Not enough players. Game cancelled.');
+      }
+      startXO(chatId);
+    }, 20000);
     return;
   }
 
   /* ===== WCG GAMEPLAY ===== */
   if (games[chatId]?.started && games[chatId].type === 'wcg') {
     const game = games[chatId];
-    const player = game.players[game.currentTurn];
-    if (userId !== player.id) return;
+    const currentPlayer = game.players[game.currentTurn];
+    if (userId !== currentPlayer) return;
 
     const word = text.toLowerCase();
     if (!word.startsWith(game.letter.toLowerCase()))
-      return bot.sendMessage(chatId, '❌ Word must start with the correct letter');
+      return bot.sendMessage(chatId, '❌ Wrong starting letter');
     if (word.length < game.minLength)
-      return bot.sendMessage(chatId, `❌ Word must be at least ${game.minLength} letters`);
-    if (game.usedWords.has(word))
+      return bot.sendMessage(chatId, `❌ Word must be at least *${game.minLength} letters*`, { parse_mode: 'Markdown' });
+    if (game.usedWords.includes(word))
       return bot.sendMessage(chatId, '❌ Word already used');
     if (!isValidWord(word))
       return bot.sendMessage(chatId, '📚 Invalid English word ❌');
 
-    game.usedWords.add(word);
+    game.usedWords.push(word);
     clearTimeout(game.timer);
     game.minLength += getSettings(game.difficulty).inc;
     game.currentTurn = (game.currentTurn + 1) % game.players.length;
-    nextRound(chatId);
+    nextWCGRound(chatId);
   }
 
-  /* ===== WCG LEADERBOARD ===== */
-  if (text === '/wcgleaderboard') {
-    if (!Object.keys(wcgLeaderboard).length) return bot.sendMessage(chatId, '📭 No games yet.');
-    let msg = '🏆 *Global WCG Leaderboard*\n\n';
-    Object.entries(wcgLeaderboard)
-      .sort((a, b) => b[1] - a[1])
-      .forEach(([id, wins], i) => msg += `${i + 1}. ${id} — ${wins} wins\n`);
-    return bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+  /* ===== XO GAMEPLAY ===== */
+  if (games[chatId]?.started && games[chatId].type === 'xo') {
+    const game = games[chatId];
+    const currentPlayer = game.players[game.currentTurn];
+    if (userId !== currentPlayer) return;
+
+    const pos = parseInt(text) - 1;
+    if (isNaN(pos) || pos < 0 || pos > 8) return;
+    if (game.board[pos] !== '⬜') return;
+
+    game.board[pos] = game.currentTurn === 0 ? '❌' : '⭕';
+    if (checkWin(game.board)) {
+      bot.sendMessage(chatId, renderBoard(game.board) + `\n🏆 ${uname(msg.from)} wins!`);
+      delete games[chatId];
+      return;
+    } else if (!game.board.includes('⬜')) {
+      bot.sendMessage(chatId, renderBoard(game.board) + '\n🤝 Draw!');
+      delete games[chatId];
+      return;
+    }
+
+    game.currentTurn = 1 - game.currentTurn;
+    const nextPlayer = game.players[game.currentTurn];
+    bot.sendMessage(chatId, renderBoard(game.board) + `\n🎯 ${uname({ id: nextPlayer })}'s turn. Type position 1-9`);
   }
 });
 
 /* =========================
-   WCG GAME FLOW
+   WCG FUNCTIONS
 ========================= */
 function startWCG(chatId) {
   const game = games[chatId];
   game.started = true;
   game.currentTurn = 0;
-  game.usedWords = new Set();
-  nextRound(chatId);
+  nextWCGRound(chatId);
 }
 
-function nextRound(chatId) {
+function nextWCGRound(chatId) {
   const game = games[chatId];
   clearTimeout(game.timer);
 
-  if (game.players.length === 1) {
-    const winner = game.players[0];
-    wcgLeaderboard[winner.name] = (wcgLeaderboard[winner.name] || 0) + 1;
-    bot.sendMessage(chatId,
-      `🏆 *Winner!*\n🎉 ${winner.name} wins!\n🔥 Wins: ${wcgLeaderboard[winner.name]}`,
-      { parse_mode: 'Markdown' }
-    );
-    delete games[chatId];
-    return;
-  }
-
-  if (game.currentTurn >= game.players.length) game.currentTurn = 0;
-  const player = game.players[game.currentTurn];
-  const settings = getSettings(game.difficulty);
   game.letter = randomLetter();
+  const playerId = game.players[game.currentTurn];
+  const settings = getSettings(game.difficulty);
 
   bot.sendMessage(chatId,
-    `🔤 *New Round*\n` +
-    `👤 Player: ${player.name}\n` +
-    `🅰️ Letter: *${game.letter}*\n` +
-    `📏 Minimum Length: *${game.minLength} letters*\n` +
-    `⏰ You have ${settings.time / 1000}s to respond`,
+    `🔤 *New Round*\n👤 Player: ${uname({ id: playerId })}\n🅰️ Letter: *${game.letter}*\n📏 Min Length: *${game.minLength}*\n⏰ Time: ${settings.time / 1000}s`,
     { parse_mode: 'Markdown' }
   );
 
   game.timer = setTimeout(() => {
-    const eliminated = game.players.splice(game.currentTurn, 1)[0];
-    bot.sendMessage(chatId, `⏰ ${eliminated.name} failed to respond in time ❌`);
-    nextRound(chatId);
-  }, settings.time);
+    const loser = game.players[game.currentTurn];
+    bot.sendMessage(chatId, `⏰ ${uname({ id: loser })} eliminated ❌`);
+    game.players.splice(game.currentTurn, 1);
+
+    if (game.players.length === 1) {
+      const winner = game.players[0];
+      wcgLeaderboard[winner] = (wcgLeaderboard[winner] || 0) + 1;
+      bot.sendMessage(chatId, `🏆 ${uname({ id: winner })} wins!\n🔥 Wins: ${wcgLeaderboard[winner]}`);
+      delete games[chatId];
+      return;
+    }
+
+    if (game.currentTurn >= game.players.length) game.currentTurn = 0;
+    nextWCGRound(chatId);
+  }, getSettings(game.difficulty).time);
 }
 
 /* =========================
-   XO / Tic-Tac-Toe
-   (Simple placeholder logic)
+   XO FUNCTIONS
 ========================= */
-bot.onText(/\/xo/, msg => {
-  bot.sendMessage(msg.chat.id, '🎮 Tic-Tac-Toe game coming soon!');
-});
+function startXO(chatId) {
+  const game = games[chatId];
+  game.started = true;
+  game.currentTurn = 0;
+  bot.sendMessage(chatId, renderBoard(game.board) + `\n🎯 ${uname({ id: game.players[game.currentTurn] })}'s turn. Type position 1-9`);
+}
+
+function renderBoard(board) {
+  return `${board[0]}${board[1]}${board[2]}\n${board[3]}${board[4]}${board[5]}\n${board[6]}${board[7]}${board[8]}`;
+}
+
+function checkWin(b) {
+  const wins = [
+    [0,1,2],[3,4,5],[6,7,8],
+    [0,3,6],[1,4,7],[2,5,8],
+    [0,4,8],[2,4,6]
+  ];
+  return wins.some(a => b[a[0]] === b[a[1]] && b[a[1]] === b[a[2]] && b[a[0]] !== '⬜');
+}
